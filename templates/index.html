@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent Web</title>
+    <link href="https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <img src="https://ui-avatars.com/api/?name=User&background=0D8ABC&color=fff" alt="User Profile" class="profile-pic">
+                <div class="sidebar-icons">
+                    <i class="fas fa-circle-notch"></i>
+                    <i class="fas fa-message"></i>
+                    <i class="fas fa-ellipsis-v"></i>
+                </div>
+            </div>
+            <div class="search-bar">
+                <div class="search-input">
+                    <i class="fas fa-search"></i>
+                    <input type="text" placeholder="Search or start new chat">
+                </div>
+            </div>
+            <div class="chat-list">
+                <div class="chat-list-item active">
+                    <img src="https://ui-avatars.com/api/?name=AI&background=25D366&color=fff" alt="AI Profile" class="profile-pic">
+                    <div class="chat-info">
+                        <div class="chat-header">
+                            <span class="chat-name">Local AI Agent</span>
+                            <span class="chat-time">Now</span>
+                        </div>
+                        <div class="chat-preview">Online & Ready</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Chat Area -->
+        <div class="chat-area">
+            <div class="chat-area-header">
+                <div class="chat-area-header-info">
+                    <img src="https://ui-avatars.com/api/?name=AI&background=25D366&color=fff" alt="AI Profile" class="profile-pic">
+                    <div class="chat-details">
+                        <span class="chat-name">Local AI Agent</span>
+                        <span class="chat-status">Using Qwen2.5-7B</span>
+                    </div>
+                </div>
+                <div class="chat-area-icons">
+                    <i class="fas fa-search"></i>
+                    <i class="fas fa-ellipsis-v"></i>
+                </div>
+            </div>
+            
+            <div class="chat-messages" id="chat-messages">
+                <div class="message ai-message">
+                    <div class="message-content">
+                        Hello! I am your local AI agent. Ask me anything based on our knowledge base!
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-area">
+                <i class="far fa-smile"></i>
+                <i class="fas fa-paperclip"></i>
+                <input type="text" id="message-input" placeholder="Type a message" autocomplete="off">
+                <button id="send-button" class="send-btn">
+                    <i class="fas fa-paper-plane"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

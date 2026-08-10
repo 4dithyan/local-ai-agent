@@ -1,0 +1,14 @@
+# Python Virtual Environment
+venv/
+env/
+.venv/
+
+# Environment Variables (SECRETS)
+.env
+
+# ChromaDB local database storage
+chroma_db/
+
+# Python Cache
+__pycache__/
+*.pyc
