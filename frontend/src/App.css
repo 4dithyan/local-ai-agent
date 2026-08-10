@@ -1,0 +1,80 @@
+/* App.css */
+.workspace-bg {
+    background: linear-gradient(180deg, #2b2d42 60%, #8d99ae 60%);
+    position: relative;
+    border: 4px solid #111;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: inset 0 0 20px rgba(0,0,0,0.5);
+  }
+  
+  .desk {
+    position: absolute;
+    bottom: 20%;
+    left: 20%;
+    width: 60%;
+    height: 10px;
+    background-color: #5c4033;
+    border: 2px solid #3e2723;
+    border-radius: 4px;
+  }
+  
+  .computer {
+    position: absolute;
+    bottom: 22%;
+    left: 45%;
+    width: 40px;
+    height: 30px;
+    background-color: #silver;
+    border: 2px solid #555;
+    border-radius: 4px;
+    box-shadow: 0 0 10px rgba(173, 216, 230, 0.5); /* Screen glow */
+  }
+  
+  .character {
+    position: absolute;
+    bottom: 22%;
+    left: 30%;
+    font-size: 50px;
+    transition: all 0.3s ease;
+  }
+  
+  /* Animations */
+  @keyframes idleBounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-5px); }
+  }
+  
+  @keyframes thinkingWobble {
+    0% { transform: rotate(0deg) translateY(0); }
+    25% { transform: rotate(-10deg) translateY(-10px); }
+    75% { transform: rotate(10deg) translateY(-10px); }
+    100% { transform: rotate(0deg) translateY(0); }
+  }
+  
+  @keyframes workingType {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-3px); }
+    75% { transform: translateX(3px); }
+  }
+  
+  .anim-idle {
+    animation: idleBounce 2s infinite;
+    filter: drop-shadow(0 0 5px rgba(0, 255, 0, 0.4));
+  }
+  
+  .anim-thinking {
+    animation: thinkingWobble 1.5s infinite;
+    filter: drop-shadow(0 0 10px rgba(255, 255, 0, 0.6));
+  }
+  
+  .anim-working {
+    animation: workingType 0.2s infinite;
+    filter: drop-shadow(0 0 10px rgba(0, 191, 255, 0.8));
+    left: 40%; /* Move closer to computer */
+  }
+  
+  .anim-error {
+    filter: drop-shadow(0 0 15px rgba(255, 0, 0, 0.8));
+    opacity: 0.7;
+  }
