@@ -28,6 +28,7 @@ export interface ActivityStep {
   agent: string;
   action: string;
   status: ActivityStatus;
+  preview?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,7 +87,8 @@ export interface ThreeDStrategy {
 export interface TechStackItem {
   category: string;
   name: string;
-  version: string;
+  version: string | null;
+  verified: boolean;
   verified_from: string | null;
   verified_at: string | null;
   reason: string;
@@ -110,16 +112,27 @@ export interface ResearchSource {
   url: string;
   type: string;
   status: string;
+  relevance_score: number;
+  quality_score: number;
 }
 
 export interface ResearchFinding {
   finding: string;
-  source: ResearchSource;
+  category: string;
+  source_url: string;
+  confidence: number;
 }
 
 export interface TechnologyComparison {
-  technology: string;
-  recommendation: string;
+  category: string;
+  options: any[]; // Or define the dict strictly if preferred
+  selected: string;
+  reason: string;
+}
+
+export interface RejectedSource {
+  title: string;
+  url: string;
   reason: string;
 }
 
@@ -128,8 +141,17 @@ export interface ResearchEvidence {
   error?: string | null;
   queries: string[];
   sources: ResearchSource[];
+  rejected_sources: RejectedSource[];
   findings: ResearchFinding[];
   technology_comparisons: TechnologyComparison[];
+}
+
+export interface ResearchQuality {
+  score: number;
+  sources_considered: number;
+  sources_read: number;
+  relevant_sources: number;
+  findings_extracted: number;
 }
 
 export interface UIResearchReport {
@@ -148,6 +170,7 @@ export interface UIResearchReport {
   accessibility_strategy: string;
   avoid: AvoidItem[];
   research?: ResearchEvidence;
+  research_quality?: ResearchQuality;
   final_blueprint: string;
 }
 

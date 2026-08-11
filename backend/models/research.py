@@ -22,6 +22,7 @@ class ActivityStep(BaseModel):
     agent: str              # e.g. "UI Research Agent"
     action: str             # Human-readable action description
     status: str             # "running" | "done" | "error"
+    preview: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +76,8 @@ class ThreeDStrategy(BaseModel):
 class TechStackItem(BaseModel):
     category: str           # e.g. "Animation", "Styling"
     name: str
-    version: str            # e.g. "latest", or specific version if found
+    version: Optional[str] = None
+    verified: bool = False
     verified_from: Optional[str] = None
     verified_at: Optional[str] = None
     reason: str
@@ -101,28 +103,42 @@ class AvoidItem(BaseModel):
 class ResearchSource(BaseModel):
     title: str
     url: str
-    type: str               # e.g. "Official Documentation", "Article", "GitHub"
+    type: str               # e.g. "official_documentation", "technical_article", "github_repository"
     status: str             # e.g. "search_result", "opened", "read", "failed"
+    relevance_score: int = 0
+    quality_score: int = 0
 
 
 class ResearchFinding(BaseModel):
     finding: str
-    source: ResearchSource
+    category: str
+    source_url: str
+    confidence: float
 
 
 class TechnologyComparison(BaseModel):
-    technology: str
-    recommendation: str
+    category: str
+    options: list[dict]
+    selected: str
     reason: str
 
 
 class ResearchEvidence(BaseModel):
-    status: str             # "completed", "offline_fallback", "failed"
+    status: str             # "completed", "offline_fallback", "failed", etc.
     error: Optional[str] = None
     queries: list[str]
     sources: list[ResearchSource]
+    rejected_sources: list[dict] # Contains {"title", "url", "reason"}
     findings: list[ResearchFinding]
     technology_comparisons: list[TechnologyComparison]
+
+
+class ResearchQuality(BaseModel):
+    score: int
+    sources_considered: int
+    sources_read: int
+    relevant_sources: int
+    findings_extracted: int
 
 
 class UIResearchReport(BaseModel):
@@ -142,6 +158,7 @@ class UIResearchReport(BaseModel):
     accessibility_strategy: str
     avoid: list[AvoidItem]
     research: Optional[ResearchEvidence] = None
+    research_quality: Optional[ResearchQuality] = None
     final_blueprint: str
 
 

@@ -68,6 +68,32 @@ function ActivityItem({ step, index }: { step: ActivityStep; index: number }) {
         >
           {step.action}
         </p>
+        
+        {step.preview && (
+          <div style={{
+            marginTop: "0.5rem",
+            padding: "0.5rem",
+            background: "rgba(0,0,0,0.15)",
+            borderRadius: "4px",
+            border: "1px solid var(--border-subtle)",
+            maxHeight: "150px",
+            overflowY: "auto",
+            overflowX: "hidden"
+          }}>
+            <p style={{
+              fontSize: "0.65rem",
+              color: "var(--text-secondary)",
+              fontFamily: "var(--font-mono)",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+              lineHeight: 1.4,
+              margin: 0
+            }}>
+              {step.preview.length > 500 ? step.preview.substring(step.preview.length - 500) : step.preview}
+            </p>
+          </div>
+        )}
+
         <p
           style={{
             fontSize: "0.625rem",
