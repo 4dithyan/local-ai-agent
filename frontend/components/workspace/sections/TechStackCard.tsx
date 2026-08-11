@@ -78,10 +78,17 @@ export function TechStackCard({ data }: Props) {
                         style={{
                           fontSize: "0.625rem",
                           fontFamily: "var(--font-mono)",
-                          color: "var(--text-muted)",
+                          color: item.verified_at ? "var(--status-green)" : "var(--text-muted)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.25rem",
                         }}
+                        title={item.verified_from ? `Verified via ${item.verified_from}` : ""}
                       >
-                        {item.version_hint}
+                        {item.version}
+                        {item.verified_at && (
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                        )}
                       </span>
                     </div>
                     <p

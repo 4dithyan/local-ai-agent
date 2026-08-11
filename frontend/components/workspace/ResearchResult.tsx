@@ -13,6 +13,7 @@ import { TypographyCard } from "./sections/TypographyCard";
 import { ColorSystemCard } from "./sections/ColorSystemCard";
 import { PerformanceCard } from "./sections/PerformanceCard";
 import { AvoidCard } from "./sections/AvoidCard";
+import { ResearchEvidenceCard } from "./sections/ResearchEvidenceCard";
 
 interface ResearchResultProps {
   report: UIResearchReport;
@@ -226,6 +227,12 @@ export function ResearchResult({ report, prompt }: ResearchResultProps) {
         <motion.div variants={item} style={{ gridColumn: "1 / -1" }}>
           <InfoCard label="Accessibility Strategy" value={report.accessibility_strategy} copyId="copy-a11y" />
         </motion.div>
+        
+        {report.research && (
+          <motion.div variants={item} style={{ gridColumn: "1 / -1" }}>
+            <ResearchEvidenceCard data={report.research} />
+          </motion.div>
+        )}
       </motion.div>
 
       {/* Final blueprint */}

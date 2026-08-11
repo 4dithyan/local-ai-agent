@@ -75,7 +75,9 @@ class ThreeDStrategy(BaseModel):
 class TechStackItem(BaseModel):
     category: str           # e.g. "Animation", "Styling"
     name: str
-    version_hint: str
+    version: str            # e.g. "latest", or specific version if found
+    verified_from: Optional[str] = None
+    verified_at: Optional[str] = None
     reason: str
 
 
@@ -96,6 +98,33 @@ class AvoidItem(BaseModel):
 # Top-Level Report
 # ---------------------------------------------------------------------------
 
+class ResearchSource(BaseModel):
+    title: str
+    url: str
+    type: str               # e.g. "Official Documentation", "Article", "GitHub"
+    status: str             # e.g. "search_result", "opened", "read", "failed"
+
+
+class ResearchFinding(BaseModel):
+    finding: str
+    source: ResearchSource
+
+
+class TechnologyComparison(BaseModel):
+    technology: str
+    recommendation: str
+    reason: str
+
+
+class ResearchEvidence(BaseModel):
+    status: str             # "completed", "offline_fallback", "failed"
+    error: Optional[str] = None
+    queries: list[str]
+    sources: list[ResearchSource]
+    findings: list[ResearchFinding]
+    technology_comparisons: list[TechnologyComparison]
+
+
 class UIResearchReport(BaseModel):
     """The complete structured output of the UI Research Agent."""
     project_summary: str
@@ -112,6 +141,7 @@ class UIResearchReport(BaseModel):
     mobile_strategy: str
     accessibility_strategy: str
     avoid: list[AvoidItem]
+    research: Optional[ResearchEvidence] = None
     final_blueprint: str
 
 
