@@ -1,5 +1,5 @@
 """
-UI Research Agent — V2 (Real Web Research + Python Validation)
+UI Research Agent — V2.1 (Evidence Grounded + Quality Scoring)
 """
 
 import json
@@ -8,6 +8,7 @@ import uuid
 import logging
 from datetime import datetime, timezone
 from typing import AsyncGenerator
+from urllib.parse import urlparse
 
 from models.research import (
     ActivityStep,
@@ -25,13 +26,19 @@ from models.research import (
     ResearchSource,
     ResearchFinding,
     TechnologyComparison,
-    ResearchEvidence
+    ResearchEvidence,
+    ResearchQuality
 )
 from llm import ollama_client
 from tools.web_search import search_web
 from tools.browser import read_page
 
 logger = logging.getLogger(__name__)
+
+MAX_SEARCHES = 8
+MAX_SOURCES = 12
+MAX_RESEARCH_ROUNDS = 2
+MIN_RELEVANCE_SCORE = 70
 
 def _activity(action: str, status: str = "running", agent: str = "UI Research Agent") -> ActivityStep:
     return ActivityStep(
@@ -61,20 +68,36 @@ def _extract_json(text: str) -> dict:
             return json.loads(match.group())
         except json.JSONDecodeError:
             pass
+    
+    # Try parsing array if it's an array
+    match_arr = re.search(r"\[[\s\S]*\]", text)
+    if match_arr:
+        try:
+            return json.loads(match_arr.group())
+        except json.JSONDecodeError:
+            pass
+            
     raise ValueError("Could not extract valid JSON from LLM response")
 
-async def _call_llm_json(prompt: str, system: str, retries: int = 2) -> dict:
+async def _call_llm_json(prompt: str, system: str, retries: int = 2) -> AsyncGenerator[tuple, None]:
     for attempt in range(retries):
         try:
             raw_response = ""
             async for token in ollama_client.generate_stream(prompt=prompt, system=system, temperature=0.3):
                 raw_response += token
-            return _extract_json(raw_response)
+                yield ("preview", raw_response)
+            parsed = _extract_json(raw_response)
+            yield ("result", parsed)
+            return
         except Exception as e:
             if attempt == retries - 1:
                 if "Could not extract valid JSON" in str(e):
                     raise ValueError(f"Could not extract valid JSON. Raw output was: {repr(raw_response)}")
                 raise e
+
+def _normalize_url(url: str) -> str:
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
 
 def _validate_and_repair_blueprint(report_data: dict) -> dict:
     """Python validation rules to fix contradictions in the blueprint."""
@@ -87,7 +110,7 @@ def _validate_and_repair_blueprint(report_data: dict) -> dict:
     
     if not use_3d:
         # Strip 3D mentions if 3D is disabled
-        if "3d" in hero:
+        if "3d " in hero or " 3d" in hero:
             report_data["hero_section"] = "Full-width gradient background with subtle CSS depth effects, soft layered gradients and restrained parallax."
         if "three.js" in content or "react three fiber" in content:
             report_data["content_layout"] = "Clean 2D content layout focusing on typography and spacing."
@@ -106,7 +129,6 @@ def _validate_and_repair_blueprint(report_data: dict) -> dict:
             report_data["tech_stack"].append({
                 "category": "3D",
                 "name": "React Three Fiber",
-                "recommendation": "recommended",
                 "reason": "Standard modern library for 3D in React."
             })
 
@@ -118,76 +140,180 @@ def _validate_and_repair_blueprint(report_data: dict) -> dict:
         
     return report_data
 
+def _calculate_quality(considered: int, read: int, relevant: int, findings: int) -> ResearchQuality:
+    score = 0
+    if considered > 0:
+        score += 20
+    if read > 0:
+        score += 30
+    if relevant > 0:
+        score += (relevant / read) * 20 if read else 0
+    if findings > 0:
+        score += min(30, findings * 5)
+        
+    return ResearchQuality(
+        score=int(score),
+        sources_considered=considered,
+        sources_read=read,
+        relevant_sources=relevant,
+        findings_extracted=findings
+    )
+
 async def run(request: UIResearchRequest) -> AsyncGenerator[ActivityStep, None]:
-    yield _activity("Understanding requirements", status="running")
+    yield _activity("Understanding requirements & planning research", status="running")
     
     # ---------------------------------------------------------
     # STAGE 1: RESEARCH PLANNING
     # ---------------------------------------------------------
     PLANNING_PROMPT = f"""Analyze this request: "{request.request}"
-Generate 2-3 web search queries to find the best modern UI patterns for this.
-Output ONLY JSON in this format: {{"research_topics": ["query 1", "query 2"]}}
-Do not write any other text. Do not use markdown. Start directly with {{"""
+Identify the project type and necessary research categories.
+Generate 2-4 HIGH-QUALITY web search queries.
+IMPORTANT: Do NOT use full conversational sentences. Use short, targeted SEO keywords (e.g., "modern AI SaaS UI", "GSAP ScrollTrigger modern website").
+Do NOT search for dictionary definitions.
 
-    queries = []
+Output ONLY JSON:
+{{
+  "project_type": "...",
+  "research_categories": ["..."],
+  "search_queries": ["query1", "query2"]
+}}"""
+
+    plan_data = {}
     try:
-        plan_data = await _call_llm_json(PLANNING_PROMPT, system="You are a machine that outputs ONLY raw JSON. No explanations.")
-        queries = plan_data.get("research_topics", plan_data.get("queries", []))[:3]
+        async for msg_type, msg_data in _call_llm_json(PLANNING_PROMPT, system="You are a senior UI researcher. Output ONLY raw JSON.", retries=2):
+            if msg_type == "preview":
+                yield _activity("Understanding requirements & planning research", status="running", preview=msg_data)
+            elif msg_type == "result":
+                plan_data = msg_data
+        queries = plan_data.get("search_queries", [])[:4]
     except Exception as e:
         yield _activity(f"Failed to plan research ({e}).", status="error")
+        queries = []
 
     # ---------------------------------------------------------
-    # STAGE 2: WEB SEARCH & READ
+    # STAGE 2: WEB SEARCH & FILTER (ADAPTIVE)
     # ---------------------------------------------------------
     all_results = []
-    read_sources = []
+    executed_queries = set()
     research_status = "not_started"
     research_error = None
     
     if queries:
         research_status = "searching"
-        yield _activity(f"Research plan created: {len(queries)} topics", status="running")
+        yield _activity(f"Research plan created for '{plan_data.get('project_type', 'Website')}'. Executing {len(queries)} queries.", status="running")
         
         for q in queries:
+            if q.lower() in executed_queries: continue
+            executed_queries.add(q.lower())
+            
             yield _activity(f"Searching: '{q}'", status="running")
             try:
-                res_json = await search_web(q, num_results=3)
+                res_json = await search_web(q, num_results=4)
                 res_data = json.loads(res_json)
                 if res_data.get("results"):
                     all_results.extend(res_data["results"])
+                else:
+                    logger.warning(f"DuckDuckGo returned 0 results for '{q}'")
             except Exception as e:
                 logger.error(f"Search failed for '{q}': {e}")
-                research_error = f"Search provider returned an error: {e}"
+                research_error = f"Search provider error: {e}"
 
         # Deduplicate
         seen_urls = set()
         unique_results = []
         for r in all_results:
-            if r["url"] not in seen_urls:
-                seen_urls.add(r["url"])
+            n_url = _normalize_url(r["url"])
+            if n_url not in seen_urls:
+                seen_urls.add(n_url)
                 unique_results.append(r)
+                
+    if not unique_results:
+        research_status = "offline_fallback"
+        yield _activity(f"WEB RESEARCH FAILED. {research_error or 'No web sources available'}. Falling back to offline knowledge.", status="error")
+    else:
+        research_status = "filtering"
+        yield _activity(f"Found {len(unique_results)} raw results. Filtering for relevance...", status="running")
+        
+        # LLM Relevance Scoring
+        results_text = json.dumps([{"id": i, "title": r["title"], "url": r["url"], "snippet": r["snippet"]} for i, r in enumerate(unique_results)], indent=2)
+        FILTER_PROMPT = f"""Project: {plan_data.get('project_type', 'Website')}
+Rate the relevance (0-100) of these search results for UI/UX/Technical research.
+REJECT (0-49) dictionary definitions, generic news, or SEO spam.
+Quality Score: Official docs/repos (90-100), good articles (70-89), random blogs (50-69).
+Output JSON array:
+[
+  {{"id": 0, "relevance_score": 95, "quality_score": 90, "decision": "read", "reason": "..."}}
+]
 
-        if not unique_results:
+Results:
+{results_text}"""
+        
+        try:
+            scored_data = []
+            async for msg_type, msg_data in _call_llm_json(FILTER_PROMPT, system="You are a critical web research filter. Output ONLY a JSON array of evaluations.", retries=2):
+                if msg_type == "preview":
+                    yield _activity(f"Found {len(unique_results)} raw results. Filtering for relevance...", status="running", preview=msg_data)
+                elif msg_type == "result":
+                    scored_data = msg_data
+            if not isinstance(scored_data, list):
+                if isinstance(scored_data, dict) and "evaluations" in scored_data:
+                    scored_data = scored_data["evaluations"]
+                else:
+                    scored_data = []
+                    
+            # Map scores back to unique_results
+            for score_item in scored_data:
+                idx = score_item.get("id")
+                if idx is not None and 0 <= idx < len(unique_results):
+                    unique_results[idx]["relevance_score"] = score_item.get("relevance_score", 0)
+                    unique_results[idx]["quality_score"] = score_item.get("quality_score", 0)
+                    unique_results[idx]["decision"] = score_item.get("decision", "reject")
+                    unique_results[idx]["reject_reason"] = score_item.get("reason", "Low relevance")
+        except Exception as e:
+            logger.warning(f"Failed to score results: {e}")
+            # Fallback heuristic
+            for r in unique_results:
+                if "dictionary" in r["url"].lower() or "meaning" in r["title"].lower():
+                    r["decision"] = "reject"
+                    r["reject_reason"] = "Appears to be a dictionary or definition."
+                else:
+                    r["decision"] = "read"
+                    r["relevance_score"] = 75
+
+    rejected_sources = []
+    read_sources = []
+    
+    if research_status == "filtering":
+        approved = [r for r in unique_results if r.get("decision") == "read" and r.get("relevance_score", 0) >= MIN_RELEVANCE_SCORE]
+        rejected = [r for r in unique_results if r.get("decision") != "read" or r.get("relevance_score", 0) < MIN_RELEVANCE_SCORE]
+        
+        for r in rejected:
+            rejected_sources.append({"title": r["title"], "url": r["url"], "reason": r.get("reject_reason", "Low relevance score")})
+            
+        if not approved:
             research_status = "offline_fallback"
-            if not research_error:
-                research_error = "No web sources available"
-            yield _activity(f"WEB RESEARCH FAILED. Reason: {research_error}. Falling back to offline model knowledge.", status="error")
+            yield _activity(f"All {len(rejected)} sources were rejected as irrelevant. Falling back to offline knowledge.", status="error")
         else:
             research_status = "reading"
-            urls_to_read = unique_results[:3]
-            yield _activity(f"Evaluating {len(urls_to_read)} highly relevant sources...", status="running")
+            # Read top 3 highest relevance
+            approved.sort(key=lambda x: x.get("relevance_score", 0) + x.get("quality_score", 0), reverse=True)
+            urls_to_read = approved[:3]
+            
+            yield _activity(f"Rejected {len(rejected)} irrelevant sources. Reading top {len(urls_to_read)} sources...", status="running")
             
             for r in urls_to_read:
-                yield _activity(f"Opening source: {r['title'][:30]}...", status="running")
+                yield _activity(f"Reading: {r['title'][:30]}...", status="running")
                 try:
                     content = await read_page(r["url"])
                     read_sources.append({
                         "title": r["title"],
                         "url": r["url"],
                         "snippet": r["snippet"],
-                        "content": content[:2000],
-                        "type": "Official Documentation" if ("docs" in r["url"] or "github" in r["url"]) else "Article",
-                        "status": "read"
+                        "content": content[:2500], # Maximize context limit safely
+                        "type": "official_documentation" if ("docs" in r["url"] or "github" in r["url"]) else "technical_article",
+                        "status": "read",
+                        "relevance_score": r.get("relevance_score", 75),
+                        "quality_score": r.get("quality_score", 75)
                     })
                 except Exception as e:
                     logger.warning(f"Failed to read {r['url']}: {e}")
@@ -195,36 +321,68 @@ Do not write any other text. Do not use markdown. Start directly with {{"""
                         "title": r["title"],
                         "url": r["url"],
                         "snippet": r["snippet"],
-                        "type": "Unknown",
-                        "status": "failed"
+                        "type": "unknown",
+                        "status": "failed",
+                        "relevance_score": 0,
+                        "quality_score": 0
                     })
+                    rejected_sources.append({"title": r["title"], "url": r["url"], "reason": f"Failed to load: {e}"})
             
             if any(s["status"] == "read" for s in read_sources):
-                research_status = "completed"
-                yield _activity(f"Sources analyzed: {len([s for s in read_sources if s['status'] == 'read'])}", status="running")
+                research_status = "extracting"
             else:
                 research_status = "offline_fallback"
-                research_error = "Could not read any page content"
-                yield _activity(f"WEB RESEARCH FAILED. Reason: {research_error}. Falling back to offline model knowledge.", status="error")
-    else:
-        research_status = "offline_fallback"
-        research_error = "Failed to generate search queries"
-        yield _activity("Proceeding in OFFLINE mode.", status="running")
+                yield _activity(f"Failed to load page content. Falling back to offline knowledge.", status="error")
 
     # ---------------------------------------------------------
-    # STAGE 3: SYNTHESIS (QWEN)
+    # STAGE 3: EVIDENCE EXTRACTION (QWEN)
     # ---------------------------------------------------------
-    yield _activity("Comparing options and generating recommendations", status="running")
+    extracted_findings = []
+    if research_status == "extracting":
+        sources_text = ""
+        for i, s in enumerate([s for s in read_sources if s["status"] == "read"]):
+            sources_text += f"SOURCE URL: {s['url']}\nTITLE: {s['title']}\nCONTENT: {s['content']}\n\n"
+            
+        EXTRACT_PROMPT = f"""Project: {plan_data.get('project_type', 'Website')}
+Extract 5-8 concrete UI/UX findings or technical recommendations from these sources.
+Output JSON array:
+[
+  {{"finding": "...", "category": "typography", "source_url": "...", "confidence": 0.9}}
+]
+
+{sources_text}"""
+
+        try:
+            findings_data = []
+            async for msg_type, msg_data in _call_llm_json(EXTRACT_PROMPT, system="You are an expert UI researcher extracting facts. Output ONLY JSON array.", retries=2):
+                if msg_type == "preview":
+                    yield _activity("Extracting key UI/UX findings from sources...", status="running", preview=msg_data)
+                elif msg_type == "result":
+                    findings_data = msg_data
+            if isinstance(findings_data, list):
+                extracted_findings = findings_data
+            elif isinstance(findings_data, dict) and "findings" in findings_data:
+                extracted_findings = findings_data["findings"]
+            
+            yield _activity(f"Extracted {len(extracted_findings)} evidence-backed findings.", status="running")
+            research_status = "completed"
+        except Exception as e:
+            logger.error(f"Failed to extract findings: {e}")
+            yield _activity(f"Failed to extract structured findings, but continuing with raw source context.", status="error")
+            research_status = "completed" # We still have sources for synthesis
+
+    # ---------------------------------------------------------
+    # STAGE 4: SYNTHESIS & VALIDATION
+    # ---------------------------------------------------------
+    yield _activity("Synthesizing final UI recommendations...", status="running")
     
     research_context = "OFFLINE RESULT - Use your baseline knowledge."
-    if research_status == "completed" and read_sources:
-        research_context = "EVIDENCE FOUND:\n"
-        for i, s in enumerate(read_sources):
-            if s["status"] == "read":
-                research_context += f"Source: {s['title']} ({s['url']})\n{s['content']}\n\n"
+    if research_status == "completed":
+        research_context = f"EXTRACTED EVIDENCE FINDINGS:\n{json.dumps(extracted_findings, indent=2)}\n\n"
 
-    SYNTHESIS_SYSTEM = """You are a UI Architect.
-Output a SIMPLE JSON object. Do not include research logs or version numbers.
+    SYNTHESIS_SYSTEM = """You are a Senior Frontend Architect.
+Generate a SIMPLE final UI JSON blueprint based on the provided evidence.
+Do NOT output URLs, version numbers, timestamps, or research metadata.
 JSON FORMAT:
 {
   "project_summary": "one sentence",
@@ -241,7 +399,7 @@ JSON FORMAT:
     {"category": "Framework", "name": "Next.js", "reason": "..."}
   ],
   "technology_comparisons": [
-    {"technology": "GSAP", "recommendation": "selective", "reason": "..."}
+    {"category": "Animation", "options": [{"name": "Motion", "best_for": "subtle UI"}, {"name": "GSAP", "best_for": "complex scrolls"}], "selected": "Motion", "reason": "..."}
   ],
   "performance_strategy": {"mobile_ready": true, "reduced_motion_support": true, "lazy_loading": true, "bundle_strategy": "...", "description": "..."},
   "navigation_pattern": "...",
@@ -256,45 +414,59 @@ Output ONLY raw JSON."""
 
     SYNTHESIS_PROMPT = f'USER REQUEST: "{request.request}"\n\n{research_context}'
     
-    yield _activity("Model is generating final blueprint...", status="running")
-    
     try:
-        raw_data = await _call_llm_json(SYNTHESIS_PROMPT, system=SYNTHESIS_SYSTEM, retries=2)
+        raw_data = {}
+        async for msg_type, msg_data in _call_llm_json(SYNTHESIS_PROMPT, system=SYNTHESIS_SYSTEM, retries=2):
+            if msg_type == "preview":
+                yield _activity("Synthesizing final UI recommendations...", status="running", preview=msg_data)
+            elif msg_type == "result":
+                raw_data = msg_data
     except Exception as e:
         yield _activity(f"Error generating blueprint: {e}", status="error")
         return
 
-    # ---------------------------------------------------------
-    # STAGE 4: VALIDATION & BLUEPRINT ASSEMBLY (PYTHON)
-    # ---------------------------------------------------------
-    yield _activity("Validating blueprint consistency", status="running")
-    
+    yield _activity("Validating blueprint consistency and compiling metadata...", status="running")
     validated_data = _validate_and_repair_blueprint(raw_data)
     
-    # Construct verified TechStackItem array
+    # Python Metadata Injection
     current_time = datetime.now(timezone.utc).isoformat()
+    verified_url = None
+    if research_status == "completed" and read_sources:
+        # Just use the first successful source as the generic verified_from if needed
+        successful = [s for s in read_sources if s["status"] == "read"]
+        if successful:
+            verified_url = successful[0]["url"]
+            
     tech_stack = []
     for t in validated_data.get("tech_stack", []):
+        is_verified = (research_status == "completed")
         tech_stack.append(TechStackItem(
             category=t.get("category", "Tool"),
             name=t.get("name", ""),
-            version="verified" if research_status == "completed" else "not_verified",
-            verified_from=read_sources[0]["url"] if research_status == "completed" and read_sources else None,
-            verified_at=current_time if research_status == "completed" else None,
+            version=None, # Never guess
+            verified=is_verified,
+            verified_from=verified_url if is_verified else None,
+            verified_at=current_time if is_verified else None,
             reason=t.get("reason", "")
         ))
 
-    # Construct Research Evidence
     evidence = ResearchEvidence(
         status=research_status,
         error=research_error,
-        queries=queries,
-        sources=[ResearchSource(title=s["title"], url=s["url"], type=s["type"], status=s["status"]) for s in read_sources],
-        findings=[],  # Can be populated by parsing reasoning
+        queries=list(executed_queries),
+        sources=[ResearchSource(title=s["title"], url=s["url"], type=s["type"], status=s["status"], relevance_score=s.get("relevance_score", 0), quality_score=s.get("quality_score", 0)) for s in read_sources],
+        rejected_sources=rejected_sources,
+        findings=[ResearchFinding(finding=f.get("finding", ""), category=f.get("category", ""), source_url=f.get("source_url", ""), confidence=f.get("confidence", 0.5)) for f in extracted_findings],
         technology_comparisons=[TechnologyComparison(**tc) for tc in validated_data.get("technology_comparisons", [])]
     )
 
-    # Parse full report
+    quality = _calculate_quality(
+        considered=len(unique_results),
+        read=len([s for s in read_sources if s["status"] == "read"]),
+        relevant=len([s for s in read_sources if s["status"] == "read" and s.get("relevance_score", 0) >= MIN_RELEVANCE_SCORE]),
+        findings=len(extracted_findings)
+    )
+
     report = UIResearchReport(
         project_summary=validated_data.get("project_summary", ""),
         visual_direction=VisualDirection(**validated_data.get("visual_direction", {})),
@@ -311,6 +483,7 @@ Output ONLY raw JSON."""
         accessibility_strategy=validated_data.get("accessibility_strategy", ""),
         avoid=[AvoidItem(**a) for a in validated_data.get("avoid", [])],
         research=evidence,
+        research_quality=quality,
         final_blueprint="OFFLINE FALLBACK\n\n" + validated_data.get("final_blueprint_text", "") if research_status != "completed" else validated_data.get("final_blueprint_text", "")
     )
 
