@@ -12,6 +12,7 @@ from typing import AsyncGenerator
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3-vl:4b")
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "180"))  # seconds
 
 
 async def generate(prompt: str, system: str = "", temperature: float = 0.3) -> str:
@@ -24,13 +25,16 @@ async def generate(prompt: str, system: str = "", temperature: float = 0.3) -> s
         "prompt": prompt,
         "system": system,
         "stream": False,
+        "think": False,  # Disable Qwen3 chain-of-thought to reduce latency
         "options": {
             "temperature": temperature,
-            "num_ctx": 8192,
+            "num_ctx": 4096,  # Smaller context = faster load + less VRAM
         },
     }
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10.0, read=OLLAMA_TIMEOUT, write=30.0, pool=5.0)
+    ) as client:
         response = await client.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json=payload,
@@ -52,13 +56,16 @@ async def generate_stream(
         "prompt": prompt,
         "system": system,
         "stream": True,
+        "think": False,  # Disable Qwen3 chain-of-thought to reduce latency
         "options": {
             "temperature": temperature,
-            "num_ctx": 8192,
+            "num_ctx": 4096,
         },
     }
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10.0, read=OLLAMA_TIMEOUT, write=30.0, pool=5.0)
+    ) as client:
         async with client.stream(
             "POST", f"{OLLAMA_BASE_URL}/api/generate", json=payload
         ) as response:

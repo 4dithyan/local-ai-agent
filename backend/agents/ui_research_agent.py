@@ -21,6 +21,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 
+import httpx
+
 from models.research import (
     ActivityStep,
     AnimationStrategy,
@@ -287,8 +289,27 @@ Remember:
             system=SYSTEM_PROMPT,
             temperature=0.3,
         )
+    except httpx.ConnectError as e:
+        yield _activity(
+            f"Cannot connect to Ollama at {ollama_client.OLLAMA_BASE_URL} — is it running? ({type(e).__name__})",
+            status="error",
+        )
+        return
+    except httpx.TimeoutException as e:
+        yield _activity(
+            f"Ollama request timed out after {ollama_client.OLLAMA_TIMEOUT}s — model may be loading or too slow ({type(e).__name__})",
+            status="error",
+        )
+        return
+    except httpx.HTTPStatusError as e:
+        yield _activity(
+            f"Ollama returned HTTP {e.response.status_code}: {e.response.text[:200]}",
+            status="error",
+        )
+        return
     except Exception as e:
-        yield _activity(f"Error contacting Ollama: {e}", status="error")
+        err_msg = str(e) or repr(e)  # repr() never returns blank
+        yield _activity(f"Error contacting Ollama ({type(e).__name__}): {err_msg}", status="error")
         return
 
     # Parse

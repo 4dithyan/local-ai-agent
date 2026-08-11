@@ -59,8 +59,12 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleActivityUpdate = useCallback((steps: ActivityStep[]) => {
-    setActivity(steps);
+  const handleActivityUpdate = useCallback((step: ActivityStep) => {
+    setActivity((prev) => [...prev, step]);
+  }, []);
+
+  const handleActivityReset = useCallback(() => {
+    setActivity([]);
   }, []);
 
   const handleAgentStart = useCallback(() => {
@@ -93,6 +97,7 @@ export default function DashboardPage() {
         <div className="workspace-column">
           <Workspace
             onActivityUpdate={handleActivityUpdate}
+            onActivityReset={handleActivityReset}
             onAgentStart={handleAgentStart}
             onAgentStop={handleAgentStop}
           />

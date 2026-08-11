@@ -229,10 +229,14 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
 
 export function Workspace({
   onActivityUpdate,
+  onActivityReset,
   onAgentStart,
   onAgentStop,
 }: {
-  onActivityUpdate: (steps: ActivityStep[]) => void;
+  /** Called with each new ActivityStep as it arrives — do NOT call inside setState */
+  onActivityUpdate: (step: ActivityStep) => void;
+  /** Called when the workspace is reset to idle */
+  onActivityReset: () => void;
   onAgentStart: () => void;
   onAgentStop: () => void;
 }) {
@@ -262,13 +266,10 @@ export function Workspace({
 
     const stop = streamResearch(
       prompt,
-      // onActivity
+      // onActivity — call parent OUTSIDE setState to avoid "setState during render" error
       (step) => {
-        setState((prev) => {
-          const updated = [...prev.activity, step];
-          onActivityUpdate(updated);
-          return { ...prev, activity: updated };
-        });
+        setState((prev) => ({ ...prev, activity: [...prev.activity, step] }));
+        onActivityUpdate(step);
       },
       // onReport
       (report) => {
@@ -295,7 +296,7 @@ export function Workspace({
     );
 
     stopRef.current = stop;
-  }, [onActivityUpdate, onAgentStart, onAgentStop]);
+  }, [onActivityUpdate, onAgentStart, onAgentStop, onActivityReset]);
 
   const handleRetry = () => {
     if (lastPrompt) handleSubmit(lastPrompt);
@@ -324,7 +325,7 @@ export function Workspace({
             className="btn-ghost"
             onClick={() => {
               setState({ phase: "idle", activity: [], report: null, error: null, activeAgentId: null });
-              onActivityUpdate([]);
+              onActivityReset();
             }}
             style={{ fontSize: "0.75rem", display: "flex", alignItems: "center", gap: "0.375rem" }}
           >
