@@ -4,7 +4,7 @@ UI Research Agent — V1
 Architecture:
     Agent
      ├── LLM  (Qwen3-VL 4B via Ollama)
-     ├── System Prompt  (see SYSTEM_PROMPT below)
+     ├── System Prompt  (compact — reduces prefill time on slow hardware)
      ├── Tools  (web_search, browser, screenshot — stubs in V1)
      ├── Memory  (conversation context, not persistent in V1)
      └── Structured Output  (UIResearchReport via JSON parsing)
@@ -12,7 +12,8 @@ Architecture:
 The agent's job is NOT to chat. Its job is:
     Research → Analyze → Compare → Recommend → Structure
 
-It takes a user's website description and produces a full UIResearchReport.
+IMPORTANT: Uses streaming generate so the request never hits a read timeout,
+even on slow local hardware. Tokens arrive continuously, keeping the connection alive.
 """
 
 import json
@@ -40,105 +41,42 @@ from models.research import (
 from llm import ollama_client
 
 # ---------------------------------------------------------------------------
-# System Prompt
+# System Prompt — kept compact to reduce prefill time on slow local models
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are the UI Research Agent — a specialist AI that analyzes website requirements
-and produces structured UI blueprints.
+SYSTEM_PROMPT = """You are the UI Research Agent. Analyze website requirements and output a UI blueprint as JSON.
 
-Your job is NOT to chat. Your job is:
-  Research → Analyze → Compare → Recommend → Structure
+KNOWLEDGE: Modern SaaS/portfolio/futuristic UI design, GSAP/Framer Motion/Lenis animation, Three.js/React Three Fiber 3D, mobile performance, accessibility.
 
-You have deep knowledge of:
+PHILOSOPHY:
+- Default animation intensity: 4/10 (subtle modern). Only go higher if user asks.
+- Avoid: excessive particles, unnecessary 3D, constant motion, heavy WebGL backgrounds.
+- Goal: premium + modern + intentional + subtle.
 
-DESIGN
-- Modern SaaS, portfolio, editorial, bento, minimal, futuristic interfaces
-- Glassmorphism, typography, responsive layouts
-- Navigation patterns, hero sections, cards, dashboards, landing pages
+OUTPUT: Respond with ONLY a valid JSON object. No markdown fences. No explanation. Just JSON.
 
-ANIMATION (conceptual scale 0–10)
-- GSAP, Framer Motion, Motion (formerly Popmotion), CSS animations
-- Scroll animations, parallax, page transitions, hover interactions
-- Micro-interactions, magnetic buttons, cursor effects, smooth scrolling, Lenis
-- Default recommendation: 4/10 (subtle modern) unless user requests otherwise
-
-3D / GRAPHICS
-- Three.js, React Three Fiber, WebGL, shaders
-- Interactive 3D, lightweight hero elements, 3D product visualization
-
-PERFORMANCE
-- Mobile performance, low-end devices, GPU usage, animation performance
-- Bundle size, lazy loading, accessibility, prefers-reduced-motion
-
-DECISION PHILOSOPHY
-- Do NOT recommend the most complicated technology
-- Recommend the best visual result for the requirements while keeping implementation practical and performant
-- Actively avoid: excessive particles, unnecessary 3D, constant movement, excessive cursor effects,
-  huge page transitions, animation everywhere, poor mobile performance, visual clutter
-- Ideal result feels: premium + modern + intentional + subtle
-
-OUTPUT FORMAT
-You MUST respond with a single valid JSON object matching this exact structure.
-No markdown fences. No extra text before or after. Just the JSON.
-
+JSON STRUCTURE:
 {
-  "project_summary": "string",
-  "visual_direction": {
-    "style": "string",
-    "confidence": 0-100,
-    "description": "string"
-  },
-  "color_system": {
-    "palette": "string",
-    "primary": "string (hex)",
-    "accent": "string (hex)",
-    "background": "string (hex)",
-    "description": "string"
-  },
-  "typography": {
-    "primary_font": "string",
-    "code_font": "string or null",
-    "scale": "string",
-    "description": "string"
-  },
+  "project_summary": "one sentence",
+  "visual_direction": {"style": "...", "confidence": 85, "description": "..."},
+  "color_system": {"palette": "...", "primary": "#hex", "accent": "#hex", "background": "#hex", "description": "..."},
+  "typography": {"primary_font": "Inter", "code_font": null, "scale": "...", "description": "..."},
   "animation_strategy": {
-    "intensity": 0-10,
-    "intensity_label": "string",
-    "tools": [
-      {"name": "string", "recommendation": "recommended|selective|avoid", "reason": "string"}
-    ],
-    "scroll_behavior": "string",
-    "description": "string"
+    "intensity": 4, "intensity_label": "Subtle Modern",
+    "tools": [{"name": "Framer Motion", "recommendation": "recommended", "reason": "..."}],
+    "scroll_behavior": "...", "description": "..."
   },
-  "three_d_strategy": {
-    "use_3d": true|false,
-    "library": "string or null",
-    "complexity": "none|low|medium|high",
-    "scope": "string",
-    "performance_rating": "good|moderate|heavy",
-    "description": "string"
-  },
-  "tech_stack": [
-    {"category": "string", "name": "string", "version_hint": "string", "reason": "string"}
-  ],
-  "performance_strategy": {
-    "mobile_ready": true|false,
-    "reduced_motion_support": true|false,
-    "lazy_loading": true|false,
-    "bundle_strategy": "string",
-    "description": "string"
-  },
-  "navigation_pattern": "string",
-  "hero_section": "string",
-  "content_layout": "string",
-  "mobile_strategy": "string",
-  "accessibility_strategy": "string",
-  "avoid": [
-    {"item": "string", "reason": "string"}
-  ],
-  "final_blueprint": "string (multi-line summary)"
-}
-"""
+  "three_d_strategy": {"use_3d": false, "library": null, "complexity": "none", "scope": "none", "performance_rating": "good", "description": "..."},
+  "tech_stack": [{"category": "Framework", "name": "Next.js", "version_hint": "latest", "reason": "..."}],
+  "performance_strategy": {"mobile_ready": true, "reduced_motion_support": true, "lazy_loading": true, "bundle_strategy": "...", "description": "..."},
+  "navigation_pattern": "...",
+  "hero_section": "...",
+  "content_layout": "...",
+  "mobile_strategy": "...",
+  "accessibility_strategy": "...",
+  "avoid": [{"item": "...", "reason": "..."}],
+  "final_blueprint": "multi-line summary"
+}"""
 
 # ---------------------------------------------------------------------------
 # Activity helper
@@ -161,16 +99,20 @@ def _activity(action: str, status: str = "running", agent: str = "UI Research Ag
 def _extract_json(text: str) -> dict:
     """
     Extract the first valid JSON object from an LLM response.
-    Handles cases where the model wraps output in markdown fences.
+    Handles markdown fences, thinking tags, and leading/trailing text.
     """
-    # Try direct parse first
     text = text.strip()
+
+    # Remove Qwen3 thinking block if present (<think>...</think>)
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
+
+    # Try direct parse
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Strip markdown fences if present
+    # Strip markdown fences
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
     text = re.sub(r"\s*```$", "", text, flags=re.MULTILINE)
     try:
@@ -197,11 +139,8 @@ def _parse_report(data: dict) -> UIResearchReport:
     """Convert raw LLM JSON dict into a typed UIResearchReport."""
 
     visual = VisualDirection(**data["visual_direction"])
-
     color = ColorSystem(**data["color_system"])
-
-    typo_data = data["typography"]
-    typo = TypographySystem(**typo_data)
+    typo = TypographySystem(**data["typography"])
 
     anim_data = data["animation_strategy"]
     tools = [AnimationTool(**t) for t in anim_data.get("tools", [])]
@@ -214,11 +153,8 @@ def _parse_report(data: dict) -> UIResearchReport:
     )
 
     three_d = ThreeDStrategy(**data["three_d_strategy"])
-
     tech = [TechStackItem(**t) for t in data.get("tech_stack", [])]
-
     perf = PerformanceStrategy(**data["performance_strategy"])
-
     avoid = [AvoidItem(**a) for a in data.get("avoid", [])]
 
     return UIResearchReport(
@@ -241,23 +177,21 @@ def _parse_report(data: dict) -> UIResearchReport:
 
 
 # ---------------------------------------------------------------------------
-# Main agent runner — yields ActivitySteps, final step contains the report
+# Main agent runner — uses STREAMING to avoid read timeouts on slow hardware
 # ---------------------------------------------------------------------------
 
 async def run(request: UIResearchRequest) -> AsyncGenerator[ActivityStep, None]:
     """
     Run the UI Research Agent.
 
-    Yields ActivityStep objects as the agent progresses.
-    The final ActivityStep has status="done" and the report embedded
-    in a non-standard field (see the FastAPI endpoint for how to capture it).
+    Uses streaming generation so the connection stays alive even on slow
+    local hardware — no read timeout since tokens arrive continuously.
 
-    Usage:
-        async for step in run(request):
-            emit_to_client(step)
+    Yields ActivityStep objects as the agent progresses.
+    The final ActivityStep has status="done" with _report attached.
     """
 
-    steps = [
+    activity_steps = [
         "Understanding your request",
         "Analyzing visual requirements",
         "Researching modern UI patterns",
@@ -267,28 +201,29 @@ async def run(request: UIResearchRequest) -> AsyncGenerator[ActivityStep, None]:
         "Generating UI blueprint",
     ]
 
-    for step_text in steps:
+    for step_text in activity_steps:
         yield _activity(step_text, status="running")
 
-    # Build the prompt
-    user_prompt = f"""Analyze the following website request and produce a complete UI research report as JSON:
+    user_prompt = (
+        f'Analyze this website request and output the JSON blueprint:\n\n"{request.request}"\n\n'
+        "Output ONLY the JSON. Default animation intensity is 4/10 unless user asks for more."
+    )
 
-USER REQUEST:
-"{request.request}"
+    # ── Stream the response (avoids read timeouts on slow machines) ──────────
+    raw_tokens: list[str] = []
+    token_count = 0
 
-Remember:
-- Default animation intensity is 4/10 (subtle modern) unless explicitly requested otherwise
-- Recommend practical, performant solutions — not the most complex
-- Output ONLY the JSON object, no other text
-"""
+    yield _activity("Model is generating response… (this may take 1-3 minutes on local hardware)", status="running")
 
-    raw_response = ""
     try:
-        raw_response = await ollama_client.generate(
+        async for token in ollama_client.generate_stream(
             prompt=user_prompt,
             system=SYSTEM_PROMPT,
             temperature=0.3,
-        )
+        ):
+            raw_tokens.append(token)
+            token_count += 1
+
     except httpx.ConnectError as e:
         yield _activity(
             f"Cannot connect to Ollama at {ollama_client.OLLAMA_BASE_URL} — is it running? ({type(e).__name__})",
@@ -297,7 +232,7 @@ Remember:
         return
     except httpx.TimeoutException as e:
         yield _activity(
-            f"Ollama request timed out after {ollama_client.OLLAMA_TIMEOUT}s — model may be loading or too slow ({type(e).__name__})",
+            f"Ollama stream timed out ({type(e).__name__}) — try restarting Ollama",
             status="error",
         )
         return
@@ -308,23 +243,28 @@ Remember:
         )
         return
     except Exception as e:
-        err_msg = str(e) or repr(e)  # repr() never returns blank
-        yield _activity(f"Error contacting Ollama ({type(e).__name__}): {err_msg}", status="error")
+        err_msg = str(e) or repr(e)
+        yield _activity(f"Ollama error ({type(e).__name__}): {err_msg}", status="error")
         return
 
-    # Parse
+    raw_response = "".join(raw_tokens)
+
+    if not raw_response.strip():
+        yield _activity("Model returned an empty response — try running the request again", status="error")
+        return
+
+    yield _activity(f"Received response ({token_count} tokens) — parsing blueprint…", status="running")
+
+    # ── Parse structured output ──────────────────────────────────────────────
     try:
         data = _extract_json(raw_response)
         report = _parse_report(data)
     except Exception as e:
         yield _activity(f"Error parsing agent response: {e}", status="error")
-        # Attach raw response for debugging
-        yield _activity(f"Raw LLM output (first 500 chars): {raw_response[:500]}", status="error")
+        yield _activity(f"Raw output (first 300 chars): {raw_response[:300]}", status="error")
         return
 
-    # Signal done — we attach the report as a special attribute
+    # ── Done — attach the report to the final activity step ─────────────────
     done_step = _activity("Research complete — UI blueprint ready", status="done")
-    # We use model_extra to sneak the report through the activity stream
-    # The FastAPI endpoint will look for this
     done_step.__dict__["_report"] = report
     yield done_step
