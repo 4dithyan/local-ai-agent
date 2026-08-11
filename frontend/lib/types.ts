@@ -86,7 +86,9 @@ export interface ThreeDStrategy {
 export interface TechStackItem {
   category: string;
   name: string;
-  version_hint: string;
+  version: string;
+  verified_from: string | null;
+  verified_at: string | null;
   reason: string;
 }
 
@@ -101,6 +103,33 @@ export interface PerformanceStrategy {
 export interface AvoidItem {
   item: string;
   reason: string;
+}
+
+export interface ResearchSource {
+  title: string;
+  url: string;
+  type: string;
+  status: string;
+}
+
+export interface ResearchFinding {
+  finding: string;
+  source: ResearchSource;
+}
+
+export interface TechnologyComparison {
+  technology: string;
+  recommendation: string;
+  reason: string;
+}
+
+export interface ResearchEvidence {
+  status: string;
+  error?: string | null;
+  queries: string[];
+  sources: ResearchSource[];
+  findings: ResearchFinding[];
+  technology_comparisons: TechnologyComparison[];
 }
 
 export interface UIResearchReport {
@@ -118,6 +147,7 @@ export interface UIResearchReport {
   mobile_strategy: string;
   accessibility_strategy: string;
   avoid: AvoidItem[];
+  research?: ResearchEvidence;
   final_blueprint: string;
 }
 
