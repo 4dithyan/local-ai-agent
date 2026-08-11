@@ -61,7 +61,7 @@ python main.py
 cd frontend
 npm install
 npm run dev
-# Dashboard at http://localhost:3000
+# Dashboard  http://localhost:3000
 ```
 
 ### 3. Make sure Ollama is running
